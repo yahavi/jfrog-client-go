@@ -1,0 +1,11 @@
+sudo: false
+os:
+  - osx
+  - linux
+go:
+  - 1.10.x
+env:
+  matrix:
+    - GO111MODULE=on
+script:
+  - go test -v tests -timeout 0 -rt.url="$JFROG_CLI_RT_URL" -rt.user="$JFROG_CLI_RT_USER" -rt.password="$JFROG_CLI_RT_PASSWORD"
