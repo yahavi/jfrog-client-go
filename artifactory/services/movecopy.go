@@ -2,17 +2,18 @@ package services
 
 import (
 	"errors"
-	"github.com/jfrog/jfrog-client-go/artifactory/auth"
-	"github.com/jfrog/jfrog-client-go/artifactory/services/utils"
-	"github.com/jfrog/jfrog-client-go/httpclient"
-	clientutils "github.com/jfrog/jfrog-client-go/utils"
-	"github.com/jfrog/jfrog-client-go/utils/errorutils"
-	"github.com/jfrog/jfrog-client-go/utils/io/fileutils"
-	"github.com/jfrog/jfrog-client-go/utils/log"
 	"net/http"
 	"path"
 	"strconv"
 	"strings"
+
+	rthttpclient "github.com/jfrog/jfrog-client-go/artifactory/httpclient"
+	"github.com/jfrog/jfrog-client-go/artifactory/services/utils"
+	"github.com/jfrog/jfrog-client-go/auth"
+	clientutils "github.com/jfrog/jfrog-client-go/utils"
+	"github.com/jfrog/jfrog-client-go/utils/errorutils"
+	"github.com/jfrog/jfrog-client-go/utils/io/fileutils"
+	"github.com/jfrog/jfrog-client-go/utils/log"
 )
 
 const (
@@ -22,20 +23,20 @@ const (
 
 type MoveCopyService struct {
 	moveType   MoveType
-	client     *httpclient.HttpClient
+	client     *rthttpclient.ArtifactoryHttpClient
 	DryRun     bool
-	ArtDetails auth.ArtifactoryDetails
+	ArtDetails auth.ServiceDetails
 }
 
-func NewMoveCopyService(client *httpclient.HttpClient, moveType MoveType) *MoveCopyService {
+func NewMoveCopyService(client *rthttpclient.ArtifactoryHttpClient, moveType MoveType) *MoveCopyService {
 	return &MoveCopyService{moveType: moveType, client: client}
 }
 
-func (mc *MoveCopyService) GetArtifactoryDetails() auth.ArtifactoryDetails {
+func (mc *MoveCopyService) GetArtifactoryDetails() auth.ServiceDetails {
 	return mc.ArtDetails
 }
 
-func (mc *MoveCopyService) SetArtifactoryDetails(rt auth.ArtifactoryDetails) {
+func (mc *MoveCopyService) SetArtifactoryDetails(rt auth.ServiceDetails) {
 	mc.ArtDetails = rt
 }
 
@@ -43,17 +44,28 @@ func (mc *MoveCopyService) IsDryRun() bool {
 	return mc.DryRun
 }
 
-func (mc *MoveCopyService) GetJfrogHttpClient() *httpclient.HttpClient {
-	return mc.client
+func (mc *MoveCopyService) GetJfrogHttpClient() (*rthttpclient.ArtifactoryHttpClient, error) {
+	return mc.client, nil
 }
 
 func (mc *MoveCopyService) MoveCopyServiceMoveFilesWrapper(moveSpec MoveCopyParams) (successCount, failedCount int, err error) {
+	var resultItems []utils.ResultItem
+	log.Info("Searching items...")
+
 	switch moveSpec.GetSpecType() {
-	case utils.WILDCARD, utils.SIMPLE:
-		successCount, failedCount, err = mc.moveWildcard(moveSpec)
+	case utils.BUILD:
+		resultItems, err = utils.SearchBySpecWithBuild(moveSpec.GetFile(), mc)
 	case utils.AQL:
-		successCount, failedCount, err = mc.moveAql(moveSpec)
+		resultItems, err = utils.SearchBySpecWithAql(moveSpec.GetFile(), mc, utils.NONE)
+	case utils.WILDCARD:
+		moveSpec.SetIncludeDir(true)
+		resultItems, err = utils.SearchBySpecWithPattern(moveSpec.GetFile(), mc, utils.NONE)
 	}
+	if err != nil {
+		return 0, 0, err
+	}
+
+	successCount, failedCount, err = mc.moveFiles(resultItems, moveSpec)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -62,27 +74,6 @@ func (mc *MoveCopyService) MoveCopyServiceMoveFilesWrapper(moveSpec MoveCopyPara
 	if failedCount > 0 {
 		err = errorutils.CheckError(errors.New("Failed " + moveMsgs[mc.moveType].MovingMsg + " " + strconv.Itoa(failedCount) + " artifacts."))
 	}
-	return
-}
-
-func (mc *MoveCopyService) moveAql(params MoveCopyParams) (successCount, failedCount int, err error) {
-	log.Info("Searching artifacts...")
-	resultItems, err := utils.AqlSearchBySpec(params.GetFile(), mc, utils.NONE)
-	if err != nil {
-		return
-	}
-	successCount, failedCount, err = mc.moveFiles(resultItems, params)
-	return
-}
-
-func (mc *MoveCopyService) moveWildcard(params MoveCopyParams) (successCount, failedCount int, err error) {
-	log.Info("Searching artifacts...")
-	params.SetIncludeDir(true)
-	resultItems, err := utils.AqlSearchDefaultReturnFields(params.GetFile(), mc, utils.NONE)
-	if err != nil {
-		return
-	}
-	successCount, failedCount, err = mc.moveFiles(resultItems, params)
 	return
 }
 
@@ -149,7 +140,7 @@ func (mc *MoveCopyService) moveFile(sourcePath, destPath string) (bool, error) {
 	}
 	httpClientsDetails := mc.GetArtifactoryDetails().CreateHttpClientDetails()
 
-	resp, body, err := mc.client.SendPost(requestFullUrl, nil, httpClientsDetails)
+	resp, body, err := mc.client.SendPost(requestFullUrl, nil, &httpClientsDetails)
 	if err != nil {
 		return false, err
 	}
@@ -179,7 +170,7 @@ func (mc *MoveCopyService) createPathInArtifactory(destPath string, conf utils.C
 		return false, err
 	}
 	httpClientsDetails := conf.GetArtifactoryDetails().CreateHttpClientDetails()
-	resp, body, err := mc.client.SendPut(requestFullUrl, nil, httpClientsDetails)
+	resp, body, err := mc.client.SendPut(requestFullUrl, nil, &httpClientsDetails)
 	if err != nil {
 		return false, err
 	}
@@ -222,5 +213,5 @@ func (mc *MoveCopyParams) IsFlat() bool {
 }
 
 func NewMoveCopyParams() MoveCopyParams {
-	return MoveCopyParams{}
+	return MoveCopyParams{ArtifactoryCommonParams: &utils.ArtifactoryCommonParams{}}
 }

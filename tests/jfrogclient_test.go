@@ -2,11 +2,12 @@ package tests
 
 import (
 	"flag"
-	"github.com/jfrog/jfrog-client-go/utils/log"
-	"github.com/jfrog/jfrog-client-go/utils/tests"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/jfrog/jfrog-client-go/utils/log"
+	"github.com/jfrog/jfrog-client-go/utils/tests"
 )
 
 const (
@@ -23,10 +24,27 @@ func TestMain(m *testing.M) {
 
 func InitArtifactoryServiceManager() {
 	flag.Parse()
+	log.SetLogger(log.NewLogger(log.DEBUG, nil))
 	createArtifactoryUploadManager()
 	createArtifactorySearchManager()
 	createArtifactoryDeleteManager()
 	createArtifactoryDownloadManager()
+	createArtifactorySecurityManager()
+	createArtifactoryCreateLocalRepositoryManager()
+	createArtifactoryUpdateLocalRepositoryManager()
+	createArtifactoryCreateRemoteRepositoryManager()
+	createArtifactoryUpdateRemoteRepositoryManager()
+	createArtifactoryCreateVirtualRepositoryManager()
+	createArtifactoryUpdateVirtualRepositoryManager()
+	createArtifactoryDeleteRepositoryManager()
+	createArtifactoryGetRepositoryManager()
+	createArtifactoryReplicationCreateManager()
+	createArtifactoryReplicationUpdateManager()
+	createArtifactoryReplicationGetManager()
+	createArtifactoryReplicationDeleteManager()
+	if *DistUrl != "" {
+		createDistributionManager()
+	}
 	createReposIfNeeded()
 }
 

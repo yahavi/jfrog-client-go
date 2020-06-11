@@ -4,9 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
-	"github.com/jfrog/jfrog-client-go/utils"
-	"github.com/jfrog/jfrog-client-go/utils/errorutils"
-	"github.com/jfrog/jfrog-client-go/utils/io/fileutils/checksum"
 	"io"
 	"io/ioutil"
 	"net/url"
@@ -14,17 +11,19 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+
+	"github.com/jfrog/jfrog-client-go/utils/errorutils"
+	"github.com/jfrog/jfrog-client-go/utils/io/fileutils/checksum"
 )
 
-const SYMLINK_FILE_CONTENT = ""
-
-var tempDirPath string
+const (
+	SYMLINK_FILE_CONTENT          = ""
+	File                 ItemType = "file"
+	Dir                  ItemType = "dir"
+)
 
 func GetFileSeparator() string {
-	if utils.IsWindows() {
-		return "\\"
-	}
-	return "/"
+	return string(os.PathSeparator)
 }
 
 // Check if path exists.
@@ -71,6 +70,7 @@ func GetFileInfo(path string, preserveSymLink bool) (fileInfo os.FileInfo, err e
 	} else {
 		fileInfo, err = os.Stat(path)
 	}
+	// We should not do CheckError here, because the error is checked by the calling functions.
 	return fileInfo, err
 }
 
@@ -126,6 +126,46 @@ func ListFilesRecursiveWalkIntoDirSymlink(path string, walkIntoDirSymlink bool) 
 	}, walkIntoDirSymlink)
 	err = errorutils.CheckError(err)
 	return
+}
+
+// Return all files with the specified extension in the specified path. Not recursive.
+func ListFilesWithExtension(path, ext string) ([]string, error) {
+	sep := GetFileSeparator()
+	if !strings.HasSuffix(path, sep) {
+		path += sep
+	}
+	fileList := []string{}
+	files, _ := ioutil.ReadDir(path)
+	path = strings.TrimPrefix(path, "."+sep)
+
+	for _, f := range files {
+		if !strings.HasSuffix(f.Name(), ext) {
+			continue
+		}
+		filePath := path + f.Name()
+		exists, err := IsFileExists(filePath, false)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			fileList = append(fileList, filePath)
+			continue
+		}
+
+		// Checks if the filepath is a symlink.
+		if IsPathSymlink(filePath) {
+			// Gets the file info of the symlink.
+			file, err := GetFileInfo(filePath, false)
+			if errorutils.CheckError(err) != nil {
+				return nil, err
+			}
+			// Checks if the symlink is a file.
+			if !file.IsDir() {
+				fileList = append(fileList, filePath)
+			}
+		}
+	}
+	return fileList, nil
 }
 
 // Return the list of files and directories in the specified path
@@ -198,47 +238,6 @@ func CreateDirIfNotExist(path string) error {
 	return err
 }
 
-func GetTempDirPath() (string, error) {
-	if tempDirPath == "" {
-		err := errorutils.CheckError(errors.New("Function cannot be used before 'tempDirPath' is created."))
-		if err != nil {
-			return "", err
-		}
-	}
-	return tempDirPath, nil
-}
-
-func CreateTempDirPath() error {
-	if tempDirPath != "" {
-		err := errorutils.CheckError(errors.New("'tempDirPath' has already been initialized."))
-		if err != nil {
-			return err
-		}
-	}
-	path, err := ioutil.TempDir("", "jfrog.cli.")
-	err = errorutils.CheckError(err)
-	if err != nil {
-		return err
-	}
-	tempDirPath = path
-	return nil
-}
-
-func RemoveTempDir() error {
-	defer func() {
-		tempDirPath = ""
-	}()
-
-	exists, err := IsDirExists(tempDirPath, false)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return os.RemoveAll(tempDirPath)
-	}
-	return nil
-}
-
 // Reads the content of the file in the source path and appends it to
 // the file in the destination path.
 func AppendFile(srcPath string, destFile *os.File) error {
@@ -280,6 +279,10 @@ func AppendFile(srcPath string, destFile *os.File) error {
 
 func GetHomeDir() string {
 	home := os.Getenv("HOME")
+	if home != "" {
+		return home
+	}
+	home = os.Getenv("USERPROFILE")
 	if home != "" {
 		return home
 	}
@@ -400,3 +403,84 @@ func CopyDir(fromPath, toPath string, includeDirs bool) error {
 	}
 	return err
 }
+
+// Removing the provided path from the filesystem
+func RemovePath(testPath string) error {
+	if _, err := os.Stat(testPath); err == nil {
+		// Delete the path
+		err = os.RemoveAll(testPath)
+		if err != nil {
+			return errors.New("Cannot remove path: " + testPath + " due to: " + err.Error())
+		}
+	}
+	return nil
+}
+
+// Renaming from old path to new path.
+func RenamePath(oldPath, newPath string) error {
+	err := CopyDir(oldPath, newPath, true)
+	if err != nil {
+		return errors.New("Error copying directory: " + oldPath + "to" + newPath + err.Error())
+	}
+	RemovePath(oldPath)
+	return nil
+}
+
+// Returns the path to the directory in which itemToFind is located.
+// Traversing through directories from current work-dir to root.
+// itemType determines whether looking for a file or dir.
+func FindUpstream(itemToFInd string, itemType ItemType) (wd string, exists bool, err error) {
+	// Create a map to store all paths visited, to avoid running in circles.
+	visitedPaths := make(map[string]bool)
+	// Get the current directory.
+	wd, err = os.Getwd()
+	if err != nil {
+		return
+	}
+	defer os.Chdir(wd)
+
+	// Get the OS root.
+	osRoot := os.Getenv("SYSTEMDRIVE")
+	if osRoot != "" {
+		// If this is a Windows machine:
+		osRoot += "\\"
+	} else {
+		// Unix:
+		osRoot = "/"
+	}
+
+	// Check if the current directory includes itemToFind. If not, check the parent directory
+	// and so on.
+	exists = false
+	for {
+		// If itemToFind is found in the current directory, return the path.
+		if itemType == File {
+			exists, err = IsFileExists(filepath.Join(wd, itemToFInd), false)
+		} else {
+			exists, err = IsDirExists(filepath.Join(wd, itemToFInd), false)
+		}
+		if err != nil || exists {
+			return
+		}
+
+		// If this the OS root, we can stop.
+		if wd == osRoot {
+			break
+		}
+
+		// Save this path.
+		visitedPaths[wd] = true
+		// CD to the parent directory.
+		wd = filepath.Dir(wd)
+		os.Chdir(wd)
+
+		// If we already visited this directory, it means that there's a loop and we can stop.
+		if visitedPaths[wd] {
+			return "", false, nil
+		}
+	}
+
+	return "", false, nil
+}
+
+type ItemType string

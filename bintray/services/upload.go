@@ -2,19 +2,22 @@ package services
 
 import (
 	"errors"
-	"github.com/jfrog/jfrog-client-go/bintray/auth"
-	"github.com/jfrog/jfrog-client-go/bintray/services/versions"
-	"github.com/jfrog/jfrog-client-go/httpclient"
-	clientutils "github.com/jfrog/jfrog-client-go/utils"
-	"github.com/jfrog/jfrog-client-go/utils/errorutils"
-	"github.com/jfrog/jfrog-client-go/utils/io/fileutils"
-	"github.com/jfrog/jfrog-client-go/utils/log"
 	"net/http"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/jfrog/jfrog-client-go/bintray/auth"
+	"github.com/jfrog/jfrog-client-go/bintray/services/utils"
+	"github.com/jfrog/jfrog-client-go/bintray/services/versions"
+	"github.com/jfrog/jfrog-client-go/httpclient"
+	clientutils "github.com/jfrog/jfrog-client-go/utils"
+	"github.com/jfrog/jfrog-client-go/utils/errorutils"
+	"github.com/jfrog/jfrog-client-go/utils/io/fileutils"
+	"github.com/jfrog/jfrog-client-go/utils/log"
 )
 
 func NewUploadService(client *httpclient.HttpClient) *UploadService {
@@ -43,13 +46,14 @@ type UploadParams struct {
 	// Target local path
 	TargetPath string
 
-	UseRegExp bool
-	Flat      bool
-	Recursive bool
-	Explode   bool
-	Override  bool
-	Publish   bool
-	Deb       string
+	UseRegExp          bool
+	Flat               bool
+	Recursive          bool
+	Explode            bool
+	Override           bool
+	Publish            bool
+	ShowInDownloadList bool
+	Deb                string
 }
 
 func (us *UploadService) Upload(uploadDetails *UploadParams) (totalUploaded, totalFailed int, err error) {
@@ -73,42 +77,78 @@ func (us *UploadService) uploadFiles(uploadDetails *UploadParams, artifacts []cl
 	size := len(artifacts)
 	var wg sync.WaitGroup
 
-	// Create an array of integers, to store the total file that were uploaded successfully.
-	// Each array item is used by a single thread.
-	uploadCount := make([]int, us.Threads, us.Threads)
+	// Create a map where the key is a thread ID,
+	// and tha value is the list of artifacts uploaded by this thread (goroutine).
+	uploadedArtifacts := sync.Map{}
 	matrixParams := getMatrixParams(uploadDetails)
 	for i := 0; i < us.Threads; i++ {
 		wg.Add(1)
 		go func(threadId int) {
+			artifactsLst := make([]clientutils.Artifact, 0)
 			logMsgPrefix := clientutils.GetLogMsgPrefix(threadId, us.DryRun)
 			for j := threadId; j < size; j += us.Threads {
-				if err != nil {
-					break
-				}
-				url := baseUrl + "/" + artifacts[j].TargetPath + matrixParams
 				if !us.DryRun {
+					url := baseUrl + "/" + artifacts[j].TargetPath + matrixParams
 					uploaded, e := uploadFile(artifacts[j], url, logMsgPrefix, us.BintrayDetails)
 					if e != nil {
-						err = e
-						break
+						log.Error(logMsgPrefix, "Failed uploading artifact:", artifacts[j].LocalPath, ":", e)
 					}
 					if uploaded {
-						uploadCount[threadId]++
+						artifactsLst = append(artifactsLst, artifacts[j])
 					}
 				} else {
 					log.Info("[Dry Run] Uploading artifact:", artifacts[j].LocalPath)
-					uploadCount[threadId]++
+					artifactsLst = append(artifactsLst, artifacts[j])
 				}
 			}
+			uploadedArtifacts.Store(threadId, artifactsLst)
 			wg.Done()
 		}(i)
 	}
 	wg.Wait()
 
-	totalUploaded = 0
-	for _, i := range uploadCount {
-		totalUploaded += i
+	if uploadDetails.ShowInDownloadList {
+		// Even though we are not running the list for download in go routines we need this outer loop
+		// since we are using a thread specific key in the uploadedArtifacts map to get around needing to use
+		// a Mutex or sync.Map when adding entries to the map.
+		for i := 0; i < us.Threads; i++ {
+			artifactsLst, _ := uploadedArtifacts.Load(i)
+			for _, artifact := range artifactsLst.([]clientutils.Artifact) {
+				if !us.DryRun {
+					listUrl := us.BintrayDetails.GetApiUrl() + path.Join(
+						"file_metadata",
+						uploadDetails.Subject,
+						uploadDetails.Repo, artifact.TargetPath)
+
+					var listed bool
+					// Retry loop, will retry to list uploaded artifacts.
+					for j := 0; j < 30; j++ {
+						if listed, err = SownInDownloadList(listUrl, us.BintrayDetails); listed || err != nil {
+							if err != nil {
+								log.Error(err)
+							}
+							break
+						}
+						time.Sleep(1 * time.Second)
+					}
+					if listed {
+						log.Info("Listed for download", artifact.TargetPath)
+					} else {
+						log.Error("Failed listing for download", artifact.TargetPath)
+					}
+				} else {
+					log.Info("[Dry Run] Listed for download", artifact.TargetPath)
+				}
+			}
+		}
 	}
+
+	totalUploaded = 0
+	uploadedArtifacts.Range(func(key, value interface{}) bool {
+		totalUploaded += len(value.([]clientutils.Artifact))
+		return true
+	})
+
 	log.Debug("Uploaded", strconv.Itoa(totalUploaded), "artifacts.")
 	totalFailed = size - totalUploaded
 	if totalFailed > 0 {
@@ -151,8 +191,11 @@ func uploadFile(artifact clientutils.Artifact, url, logMsgPrefix string, bintray
 	log.Info(logMsgPrefix+"Uploading artifact:", artifact.LocalPath)
 
 	httpClientsDetails := bintrayDetails.CreateHttpClientDetails()
-	client := httpclient.NewDefaultHttpClient()
-	resp, body, err := client.UploadFile(artifact.LocalPath, url, httpClientsDetails, 0)
+	client, err := httpclient.ClientBuilder().Build()
+	if err != nil {
+		return false, err
+	}
+	resp, body, err := client.UploadFile(artifact.LocalPath, url, logMsgPrefix, httpClientsDetails, utils.BintrayUploadRetries, nil)
 	if err != nil {
 		return false, err
 	}
@@ -164,6 +207,21 @@ func uploadFile(artifact clientutils.Artifact, url, logMsgPrefix string, bintray
 	return resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK, nil
 }
 
+func SownInDownloadList(url string, bintrayDetails auth.BintrayDetails) (bool, error) {
+	httpClientsDetails := bintrayDetails.CreateHttpClientDetails()
+	client, err := httpclient.ClientBuilder().Build()
+	if err != nil {
+		return false, err
+	}
+	resp, body, err := client.SendPut(url, []byte(`{"list_in_downloads":true}`), httpClientsDetails)
+	if err != nil {
+		return false, err
+	}
+	log.Debug("Bintray response: " + resp.Status + "\n" + clientutils.IndentJson(body))
+
+	return resp.StatusCode == http.StatusCreated || resp.StatusCode == http.StatusOK, nil
+}
+
 func getSingleFileToUpload(rootPath, targetPath string, flat bool) clientutils.Artifact {
 	var uploadPath string
 	rootPathOrig := rootPath
@@ -171,6 +229,7 @@ func getSingleFileToUpload(rootPath, targetPath string, flat bool) clientutils.A
 		rootPath = targetPath
 		targetPath = ""
 	}
+
 	if flat {
 		uploadPath, _ = fileutils.GetFileAndDirFromPath(rootPath)
 		uploadPath = targetPath + uploadPath
@@ -187,7 +246,9 @@ func (us *UploadService) getFilesToUpload(uploadDetails *UploadParams) ([]client
 		debianDefaultPath = getDebianDefaultPath(uploadDetails.Deb, uploadDetails.Package)
 	}
 
-	rootPath := clientutils.GetRootPath(uploadDetails.Pattern, uploadDetails.UseRegExp)
+	// Save parentheses index in pattern, witch have corresponding placeholder.
+	placeholderParentheses := clientutils.NewParenthesesSlice(uploadDetails.Pattern, uploadDetails.TargetPath)
+	rootPath := clientutils.GetRootPath(uploadDetails.Pattern, uploadDetails.UseRegExp, placeholderParentheses)
 	if !fileutils.IsPathExists(rootPath, false) {
 		err := errorutils.CheckError(errors.New("Path does not exist: " + rootPath))
 		if err != nil {

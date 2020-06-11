@@ -6,6 +6,7 @@ import (
 	"fmt"
 	serviceutils "github.com/jfrog/jfrog-client-go/artifactory/services/utils"
 	"github.com/jfrog/jfrog-client-go/utils"
+	clientutils "github.com/jfrog/jfrog-client-go/utils"
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 	"github.com/jfrog/jfrog-client-go/utils/io/fileutils"
 	"github.com/jfrog/jfrog-client-go/utils/io/fileutils/checksum"
@@ -31,9 +32,15 @@ func GetPaths(rootPath string, isRecursive, includeDirs, isSymlink bool) ([]stri
 
 // Transform to regexp and prepare Exclude patterns to be used
 func PrepareExcludePathPattern(params serviceutils.FileGetter) string {
+	exclusions := params.GetExclusions()
+	if len(exclusions) == 0 {
+		// Support legacy exclude patterns. 'Exclude patterns' are deprecated and replaced by 'exclusions'.
+		exclusions = params.GetExcludePatterns()
+	}
+
 	excludePathPattern := ""
-	if len(params.GetExcludePatterns()) > 0 {
-		for _, singleExcludePattern := range params.GetExcludePatterns() {
+	if len(exclusions) > 0 {
+		for _, singleExcludePattern := range exclusions {
 			if len(singleExcludePattern) > 0 {
 				singleExcludePattern = utils.ReplaceTildeWithUserHome(singleExcludePattern)
 				singleExcludePattern = utils.PrepareLocalPathForUpload(singleExcludePattern, params.IsRegexp())
@@ -126,9 +133,9 @@ func GetFileSymlinkPath(filePath string) (string, error) {
 
 // Get the local root path, from which to start collecting artifacts to be uploaded to Artifactory.
 // If path dose not exist error will be returned.
-func GetRootPath(pattern string, isRegexp, preserveSymLink bool) (string, error) {
-	rootPath := utils.GetRootPath(pattern, isRegexp)
-
+func GetRootPath(pattern, target string, isRegexp, preserveSymLink bool) (string, error) {
+	placeholderParentheses := clientutils.NewParenthesesSlice(pattern, target)
+	rootPath := utils.GetRootPath(pattern, isRegexp, placeholderParentheses)
 	if !fileutils.IsPathExists(rootPath, preserveSymLink) {
 		return "", errorutils.CheckError(errors.New("Path does not exist: " + rootPath))
 	}

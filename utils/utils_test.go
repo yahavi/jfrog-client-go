@@ -1,7 +1,9 @@
 package utils
 
-import "testing"
-import "reflect"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestRemoveRepoFromPath(t *testing.T) {
 	assertRemoveRepoFromPath("repo/abc/def", "/abc/def", t)
@@ -59,5 +61,103 @@ func assertSplitWithEscape(str string, expected []string, t *testing.T) {
 	result := SplitWithEscape(str, '/')
 	if !reflect.DeepEqual(result, expected) {
 		t.Error("Unexpected string array built. Expected: `", expected, "` Got `", result, "`")
+	}
+}
+
+func TestCleanPath(t *testing.T) {
+	if IsWindows() {
+		parameter := "\\\\foo\\\\baz\\\\..\\\\bar\\\\*"
+		got := cleanPath(parameter)
+		want := "\\\\foo\\\\bar\\\\*"
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+		parameter = "\\\\foo\\\\\\\\bar\\\\*"
+		got = cleanPath(parameter)
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+		parameter = "\\\\foo\\\\.\\\\bar\\\\*"
+		got = cleanPath(parameter)
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+		parameter = "\\\\foo\\\\.\\\\bar\\\\*\\\\"
+		want = "\\\\foo\\\\bar\\\\*\\\\"
+		got = cleanPath(parameter)
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+		parameter = "foo\\\\bar"
+		got = cleanPath(parameter)
+		want = "foo\\\\bar"
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+		parameter = ".\\\\foo\\\\bar\\\\"
+		got = cleanPath(parameter)
+		want = "foo\\\\bar\\\\"
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+	} else {
+		parameter := "/foo/bar/"
+		got := cleanPath(parameter)
+		want := "/foo/bar/"
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+		parameter = "/foo/baz/../bar/*"
+		got = cleanPath(parameter)
+		want = "/foo/bar/*"
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+		parameter = "/foo//bar/*"
+		got = cleanPath(parameter)
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+		parameter = "/foo/./bar/*"
+		got = cleanPath(parameter)
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+		parameter = "/foo/./bar/*/"
+		want = "/foo/bar/*/"
+		got = cleanPath(parameter)
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+		parameter = "foo/bar"
+		got = cleanPath(parameter)
+		want = "foo/bar"
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+		parameter = "./foo/bar/"
+		got = cleanPath(parameter)
+		want = "foo/bar/"
+		if got != want {
+			t.Errorf("cleanPath(%s) == %s, want %s", parameter, got, want)
+		}
+	}
+}
+func TestIsWildcardParentheses(t *testing.T) {
+	strA := "/tmp/cache/download/(github.com/)"
+	strB := "/tmp/cache/download/(github.com/*)"
+	parenthesesA := NewParenthesesSlice(strA, "")
+	parenthesesB := NewParenthesesSlice(strA, "{1}")
+
+	got := isWildcardParentheses(strA, parenthesesA)
+	want := false
+	if got != want {
+		t.Errorf("TestIsWildcardParentheses() == %t, want %t", got, want)
+	}
+
+	got = isWildcardParentheses(strB, parenthesesB)
+	want = true
+	if got != want {
+		t.Errorf("TestIsWildcardParentheses() == %t, want %t", got, want)
 	}
 }

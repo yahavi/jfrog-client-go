@@ -1,30 +1,32 @@
 package services
 
 import (
-	"github.com/jfrog/jfrog-client-go/artifactory/auth"
-	"github.com/jfrog/jfrog-client-go/artifactory/services/utils"
-	"github.com/jfrog/jfrog-client-go/httpclient"
 	"io"
+	"net/http"
+
+	rthttpclient "github.com/jfrog/jfrog-client-go/artifactory/httpclient"
+	"github.com/jfrog/jfrog-client-go/artifactory/services/utils"
+	"github.com/jfrog/jfrog-client-go/auth"
+	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 )
 
 type ReadFileService struct {
-	client       *httpclient.HttpClient
-	ArtDetails   auth.ArtifactoryDetails
+	client       *rthttpclient.ArtifactoryHttpClient
+	ArtDetails   auth.ServiceDetails
 	DryRun       bool
 	MinSplitSize int64
 	SplitCount   int
-	Retries      int
 }
 
-func NewReadFileService(client *httpclient.HttpClient) *ReadFileService {
+func NewReadFileService(client *rthttpclient.ArtifactoryHttpClient) *ReadFileService {
 	return &ReadFileService{client: client}
 }
 
-func (ds *ReadFileService) GetArtifactoryDetails() auth.ArtifactoryDetails {
+func (ds *ReadFileService) GetArtifactoryDetails() auth.ServiceDetails {
 	return ds.ArtDetails
 }
 
-func (ds *ReadFileService) SetArtifactoryDetails(rt auth.ArtifactoryDetails) {
+func (ds *ReadFileService) SetArtifactoryDetails(rt auth.ServiceDetails) {
 	ds.ArtDetails = rt
 }
 
@@ -32,11 +34,11 @@ func (ds *ReadFileService) IsDryRun() bool {
 	return ds.DryRun
 }
 
-func (ds *ReadFileService) GetJfrogHttpClient() *httpclient.HttpClient {
-	return ds.client
+func (ds *ReadFileService) GetJfrogHttpClient() (*rthttpclient.ArtifactoryHttpClient, error) {
+	return ds.client, nil
 }
 
-func (ds *ReadFileService) SetArtDetails(artDetails auth.ArtifactoryDetails) {
+func (ds *ReadFileService) SetServiceDetails(artDetails auth.ServiceDetails) {
 	ds.ArtDetails = artDetails
 }
 
@@ -54,5 +56,13 @@ func (ds *ReadFileService) ReadRemoteFile(downloadPath string) (io.ReadCloser, e
 		return nil, err
 	}
 	httpClientsDetails := ds.ArtDetails.CreateHttpClientDetails()
-	return ds.client.ReadRemoteFile(readPath, httpClientsDetails, ds.Retries)
+	ioReadCloser, resp, err := ds.client.ReadRemoteFile(readPath, &httpClientsDetails)
+	if err != nil {
+		return nil, err
+	}
+	err = errorutils.CheckResponseStatus(resp, http.StatusOK)
+	if err != nil {
+		return nil, err
+	}
+	return ioReadCloser, err
 }

@@ -1,25 +1,25 @@
 package services
 
 import (
-	"github.com/jfrog/jfrog-client-go/artifactory/auth"
+	rthttpclient "github.com/jfrog/jfrog-client-go/artifactory/httpclient"
 	"github.com/jfrog/jfrog-client-go/artifactory/services/utils"
-	"github.com/jfrog/jfrog-client-go/httpclient"
+	"github.com/jfrog/jfrog-client-go/auth"
 )
 
 type SearchService struct {
-	client     *httpclient.HttpClient
-	ArtDetails auth.ArtifactoryDetails
+	client     *rthttpclient.ArtifactoryHttpClient
+	ArtDetails auth.ServiceDetails
 }
 
-func NewSearchService(client *httpclient.HttpClient) *SearchService {
+func NewSearchService(client *rthttpclient.ArtifactoryHttpClient) *SearchService {
 	return &SearchService{client: client}
 }
 
-func (s *SearchService) GetArtifactoryDetails() auth.ArtifactoryDetails {
+func (s *SearchService) GetArtifactoryDetails() auth.ServiceDetails {
 	return s.ArtDetails
 }
 
-func (s *SearchService) SetArtifactoryDetails(rt auth.ArtifactoryDetails) {
+func (s *SearchService) SetArtifactoryDetails(rt auth.ServiceDetails) {
 	s.ArtDetails = rt
 }
 
@@ -27,8 +27,8 @@ func (s *SearchService) IsDryRun() bool {
 	return false
 }
 
-func (s *SearchService) GetJfrogHttpClient() *httpclient.HttpClient {
-	return s.client
+func (s *SearchService) GetJfrogHttpClient() (*rthttpclient.ArtifactoryHttpClient, error) {
+	return s.client, nil
 }
 
 func (s *SearchService) Search(searchParams SearchParams) ([]utils.ResultItem, error) {
@@ -44,7 +44,7 @@ func (s *SearchParams) GetFile() *utils.ArtifactoryCommonParams {
 }
 
 func NewSearchParams() SearchParams {
-	return SearchParams{}
+	return SearchParams{ArtifactoryCommonParams: &utils.ArtifactoryCommonParams{}}
 }
 
 func SearchBySpecFiles(searchParams SearchParams, flags utils.CommonConf, requiredArtifactProps utils.RequiredArtifactProps) ([]utils.ResultItem, error) {
@@ -53,19 +53,17 @@ func SearchBySpecFiles(searchParams SearchParams, flags utils.CommonConf, requir
 	var err error
 
 	switch searchParams.GetSpecType() {
-	case utils.WILDCARD, utils.SIMPLE:
-		itemsFound, e := utils.AqlSearchDefaultReturnFields(searchParams.GetFile(), flags, requiredArtifactProps)
-		if e != nil {
-			err = e
-			return resultItems, err
-		}
-		resultItems = append(resultItems, itemsFound...)
+	case utils.WILDCARD:
+		itemsFound, err = utils.SearchBySpecWithPattern(searchParams.GetFile(), flags, requiredArtifactProps)
+	case utils.BUILD:
+		itemsFound, err = utils.SearchBySpecWithBuild(searchParams.GetFile(), flags)
 	case utils.AQL:
-		itemsFound, err = utils.AqlSearchBySpec(searchParams.GetFile(), flags, requiredArtifactProps)
-		if err != nil {
-			return resultItems, err
-		}
-		resultItems = append(resultItems, itemsFound...)
+		itemsFound, err = utils.SearchBySpecWithAql(searchParams.GetFile(), flags, requiredArtifactProps)
 	}
+	if err != nil {
+		return resultItems, err
+	}
+	resultItems = append(resultItems, itemsFound...)
+
 	return resultItems, err
 }

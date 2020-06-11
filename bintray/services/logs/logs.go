@@ -3,6 +3,7 @@ package logs
 import (
 	"errors"
 	"github.com/jfrog/jfrog-client-go/bintray/auth"
+	"github.com/jfrog/jfrog-client-go/bintray/services/utils"
 	"github.com/jfrog/jfrog-client-go/bintray/services/versions"
 	"github.com/jfrog/jfrog-client-go/httpclient"
 	clientutils "github.com/jfrog/jfrog-client-go/utils"
@@ -29,7 +30,10 @@ func (ls *LogsService) List(versionPath *versions.Path) error {
 	listUrl := ls.BintrayDetails.GetApiUrl() + path.Join("packages", versionPath.Subject, versionPath.Repo, versionPath.Package, "logs")
 	httpClientsDetails := ls.BintrayDetails.CreateHttpClientDetails()
 	log.Info("Getting logs...")
-	client := httpclient.NewDefaultHttpClient()
+	client, err := httpclient.ClientBuilder().Build()
+	if err != nil {
+		return err
+	}
 	resp, body, _, _ := client.SendGet(listUrl, true, httpClientsDetails)
 
 	if resp.StatusCode != http.StatusOK {
@@ -49,13 +53,16 @@ func (ls *LogsService) Download(versionPath *versions.Path, logName string) erro
 
 	httpClientsDetails := ls.BintrayDetails.CreateHttpClientDetails()
 	log.Info("Downloading logs...")
-	client := httpclient.NewDefaultHttpClient()
+	client, err := httpclient.ClientBuilder().Build()
+	if err != nil {
+		return err
+	}
 	details := &httpclient.DownloadFileDetails{
 		FileName:      logName,
 		DownloadPath:  downloadUrl,
 		LocalPath:     "",
 		LocalFileName: logName}
-	resp, err := client.DownloadFile(details, "", httpClientsDetails, 3, false)
+	resp, err := client.DownloadFile(details, "", httpClientsDetails, utils.BintrayDownloadRetries, false)
 	if err != nil {
 		return err
 	}

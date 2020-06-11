@@ -3,6 +3,7 @@ package services
 import (
 	"github.com/jfrog/jfrog-client-go/utils"
 	"github.com/jfrog/jfrog-client-go/utils/io/fileutils"
+	"github.com/jfrog/jfrog-client-go/utils/log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,13 +31,14 @@ func TestExtractRepo(t *testing.T) {
 }
 
 func TestGetLfsFilesFromGit(t *testing.T) {
+	log.SetLogger(log.NewLogger(log.DEBUG, nil))
 	fileId := "4bf4c8c0fef3f5c8cf6f255d1c784377138588c0a9abe57e440bce3ccb350c2e"
 	gitPath := getCliDotGitPath(t)
 	refs := strings.Join([]string{"refs", "heads", "*"}, "/")
 	if utils.IsWindows() {
 		refs = strings.Join([]string{"refs", "heads", "*"}, "\\\\")
 	}
-	results, err := getLfsFilesFromGit(gitPath, "HEAD|" + refs)
+	results, err := getLfsFilesFromGit(gitPath, "HEAD|"+refs)
 	if err != nil {
 		t.Error("Got err: ", err)
 	}

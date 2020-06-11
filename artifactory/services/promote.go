@@ -3,23 +3,24 @@ package services
 import (
 	"encoding/json"
 	"errors"
-	"github.com/jfrog/jfrog-client-go/artifactory/auth"
+	"net/http"
+	"path"
+
+	rthttpclient "github.com/jfrog/jfrog-client-go/artifactory/httpclient"
 	"github.com/jfrog/jfrog-client-go/artifactory/services/utils"
-	"github.com/jfrog/jfrog-client-go/httpclient"
+	"github.com/jfrog/jfrog-client-go/auth"
 	clientutils "github.com/jfrog/jfrog-client-go/utils"
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 	"github.com/jfrog/jfrog-client-go/utils/log"
-	"net/http"
-	"path"
 )
 
 type PromoteService struct {
-	client     *httpclient.HttpClient
-	ArtDetails auth.ArtifactoryDetails
+	client     *rthttpclient.ArtifactoryHttpClient
+	ArtDetails auth.ServiceDetails
 	DryRun     bool
 }
 
-func NewPromotionService(client *httpclient.HttpClient) *PromoteService {
+func NewPromotionService(client *rthttpclient.ArtifactoryHttpClient) *PromoteService {
 	return &PromoteService{client: client}
 }
 
@@ -40,6 +41,10 @@ func (ps *PromoteService) BuildPromote(promotionParams PromotionParams) error {
 	if err != nil {
 		return err
 	}
+	props, err := utils.ParseProperties(promotionParams.GetProperties(), utils.JoinCommas)
+	if err != nil {
+		return err
+	}
 
 	data := BuildPromotionBody{
 		Status:              promotionParams.GetStatus(),
@@ -48,7 +53,8 @@ func (ps *PromoteService) BuildPromote(promotionParams PromotionParams) error {
 		IncludeDependencies: promotionParams.IsIncludeDependencies(),
 		SourceRepo:          promotionParams.GetSourceRepo(),
 		TargetRepo:          promotionParams.GetTargetRepo(),
-		DryRun:              ps.isDryRun()}
+		DryRun:              ps.isDryRun(),
+		Properties:          props.ToBuildPromoteMap()}
 	requestContent, err := json.Marshal(data)
 	if err != nil {
 		return errorutils.CheckError(err)
@@ -57,7 +63,7 @@ func (ps *PromoteService) BuildPromote(promotionParams PromotionParams) error {
 	httpClientsDetails := ps.ArtDetails.CreateHttpClientDetails()
 	utils.SetContentType("application/vnd.org.jfrog.artifactory.build.PromotionRequest+json", &httpClientsDetails.Headers)
 
-	resp, body, err := ps.client.SendPost(requestFullUrl, requestContent, httpClientsDetails)
+	resp, body, err := ps.client.SendPost(requestFullUrl, requestContent, &httpClientsDetails)
 	if err != nil {
 		return err
 	}
@@ -72,13 +78,14 @@ func (ps *PromoteService) BuildPromote(promotionParams PromotionParams) error {
 }
 
 type BuildPromotionBody struct {
-	Comment             string `json:"comment,omitempty"`
-	SourceRepo          string `json:"sourceRepo,omitempty"`
-	TargetRepo          string `json:"targetRepo,omitempty"`
-	Status              string `json:"status,omitempty"`
-	IncludeDependencies bool   `json:"dependencies,omitempty"`
-	Copy                bool   `json:"copy,omitempty"`
-	DryRun              bool   `json:"dryRun,omitempty"`
+	Comment             string              `json:"comment,omitempty"`
+	SourceRepo          string              `json:"sourceRepo,omitempty"`
+	TargetRepo          string              `json:"targetRepo,omitempty"`
+	Status              string              `json:"status,omitempty"`
+	IncludeDependencies bool                `json:"dependencies,omitempty"`
+	Copy                bool                `json:"copy,omitempty"`
+	DryRun              bool                `json:"dryRun,omitempty"`
+	Properties          map[string][]string `json:"properties,omitempty"`
 }
 
 type PromotionParams struct {
@@ -90,6 +97,7 @@ type PromotionParams struct {
 	Copy                bool
 	IncludeDependencies bool
 	SourceRepo          string
+	Properties          string
 }
 
 func (bp *PromotionParams) GetBuildName() string {
@@ -122,6 +130,10 @@ func (bp *PromotionParams) IsIncludeDependencies() bool {
 
 func (bp *PromotionParams) GetSourceRepo() string {
 	return bp.SourceRepo
+}
+
+func (bp *PromotionParams) GetProperties() string {
+	return bp.Properties
 }
 
 func NewPromotionParams() PromotionParams {

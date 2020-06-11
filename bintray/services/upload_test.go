@@ -5,13 +5,18 @@ import (
 	"github.com/jfrog/jfrog-client-go/bintray/services/versions"
 	"github.com/jfrog/jfrog-client-go/httpclient"
 	testsutils "github.com/jfrog/jfrog-client-go/tests"
+	"github.com/jfrog/jfrog-client-go/utils/log"
 	"path/filepath"
 	"strconv"
 	"testing"
 )
 
 func TestSingleFileUpload(t *testing.T) {
-	uploadService := newDryRunUploadService()
+	log.SetLogger(log.NewLogger(log.DEBUG, nil))
+	uploadService, err := newDryRunUploadService()
+	if err != nil {
+		t.Error(err.Error())
+	}
 	params, err := createUploadParams()
 	if err != nil {
 		t.Error(err.Error())
@@ -63,7 +68,10 @@ func TestPatternNonRecursiveUpload(t *testing.T) {
 }
 
 func testPatternUpload(t *testing.T, params *UploadParams) {
-	uploadService := newDryRunUploadService()
+	uploadService, err := newDryRunUploadService()
+	if err != nil {
+		t.Error(err.Error())
+	}
 
 	params.Pattern = testsutils.FixWinPath(filepath.Join("testdata", "*"))
 	uploaded1, _, err := uploadService.Upload(params)
@@ -107,10 +115,14 @@ func createUploadParams() (*UploadParams, error) {
 	return params, nil
 }
 
-func newDryRunUploadService() *UploadService {
-	uploadService := NewUploadService(httpclient.NewDefaultHttpClient())
+func newDryRunUploadService() (*UploadService, error) {
+	client, err := httpclient.ClientBuilder().Build()
+	if err != nil {
+		return nil, err
+	}
+	uploadService := NewUploadService(client)
 	uploadService.DryRun = true
 	uploadService.BintrayDetails = tests.CreateBintrayDetails()
 	uploadService.Threads = 1
-	return uploadService
+	return uploadService, err
 }

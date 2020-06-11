@@ -1,7 +1,7 @@
 package buildinfo
 
 import (
-	"github.com/jfrog/jfrog-client-go/artifactory/auth"
+	"github.com/jfrog/jfrog-client-go/auth"
 	"time"
 )
 
@@ -26,9 +26,13 @@ func (targetBuildInfo *BuildInfo) SetAgentVersion(agentVersion string) {
 	targetBuildInfo.Agent.Version = agentVersion
 }
 
-// Append the modules of the recieved build info to this build info.
+func (targetBuildInfo *BuildInfo) SetArtifactoryPluginVersion(artifactoryPluginVersion string) {
+	targetBuildInfo.ArtifactoryPluginVersion = artifactoryPluginVersion
+}
+
+// Append the modules of the received build info to this build info.
 // If the two build info instances contain modules with identical names, these modules are merged.
-// When merging the modules, the artifacts and dependencies remain unique according to their checksums.
+// When merging the modules, the artifacts and dependencies remain unique according to their checksum.
 func (targetBuildInfo *BuildInfo) Append(buildInfo *BuildInfo) {
 	for _, newModule := range buildInfo.Modules {
 		exists := false
@@ -82,15 +86,17 @@ func mergeDependencies(mergeDependencies *[]Dependency, intoDependencies *[]Depe
 }
 
 type BuildInfo struct {
-	Name                 string   `json:"name,omitempty"`
-	Number               string   `json:"number,omitempty"`
-	Agent                *Agent   `json:"agent,omitempty"`
-	BuildAgent           *Agent   `json:"buildAgent,omitempty"`
-	Modules              []Module `json:"modules,omitempty"`
-	Started              string   `json:"started,omitempty"`
-	Properties           Env      `json:"properties,omitempty"`
-	ArtifactoryPrincipal string   `json:"artifactoryPrincipal,omitempty"`
-	BuildUrl             string   `json:"url,omitempty"`
+	Name                     string   `json:"name,omitempty"`
+	Number                   string   `json:"number,omitempty"`
+	Agent                    *Agent   `json:"agent,omitempty"`
+	BuildAgent               *Agent   `json:"buildAgent,omitempty"`
+	Modules                  []Module `json:"modules,omitempty"`
+	Started                  string   `json:"started,omitempty"`
+	Properties               Env      `json:"properties,omitempty"`
+	ArtifactoryPrincipal     string   `json:"artifactoryPrincipal,omitempty"`
+	BuildUrl                 string   `json:"url,omitempty"`
+	Issues                   *Issues  `json:"issues,omitempty"`
+	ArtifactoryPluginVersion string   `json:"artifactoryPluginVersion,omitempty"`
 	*Vcs
 }
 
@@ -108,13 +114,35 @@ type Module struct {
 
 type Artifact struct {
 	Name string `json:"name,omitempty"`
+	Type string `json:"type,omitempty"`
+	Path string `json:"path,omitempty"`
 	*Checksum
 }
 
 type Dependency struct {
 	Id     string   `json:"id,omitempty"`
+	Type   string   `json:"type,omitempty"`
 	Scopes []string `json:"scopes,omitempty"`
 	*Checksum
+}
+
+type Issues struct {
+	Tracker                *Tracker        `json:"tracker,omitempty"`
+	AggregateBuildIssues   bool            `json:"aggregateBuildIssues,omitempty"`
+	AggregationBuildStatus string          `json:"aggregationBuildStatus,omitempty"`
+	AffectedIssues         []AffectedIssue `json:"affectedIssues,omitempty"`
+}
+
+type Tracker struct {
+	Name    string `json:"name,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
+type AffectedIssue struct {
+	Key        string `json:"key,omitempty"`
+	Url        string `json:"url,omitempty"`
+	Summary    string `json:"summary,omitempty"`
+	Aggregated bool   `json:"aggregated,omitempty"`
 }
 
 type Checksum struct {
@@ -136,8 +164,9 @@ type Partial struct {
 	Dependencies []Dependency `json:"Dependencies,omitempty"`
 	Env          Env          `json:"Env,omitempty"`
 	Timestamp    int64        `json:"Timestamp,omitempty"`
-	*Vcs
 	ModuleId     string       `json:"ModuleId,omitempty"`
+	Issues       *Issues      `json:"Issues,omitempty"`
+	*Vcs
 }
 
 func (partials Partials) Len() int {
@@ -157,18 +186,18 @@ type General struct {
 }
 
 type Configuration struct {
-	ArtDetails auth.ArtifactoryDetails
+	ArtDetails auth.ServiceDetails
 	BuildUrl   string
 	DryRun     bool
 	EnvInclude string
 	EnvExclude string
 }
 
-func (config *Configuration) GetArtifactoryDetails() auth.ArtifactoryDetails {
+func (config *Configuration) GetArtifactoryDetails() auth.ServiceDetails {
 	return config.ArtDetails
 }
 
-func (config *Configuration) SetArtifactoryDetails(artDetails auth.ArtifactoryDetails) {
+func (config *Configuration) SetArtifactoryDetails(artDetails auth.ServiceDetails) {
 	config.ArtDetails = artDetails
 }
 

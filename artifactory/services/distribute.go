@@ -3,9 +3,9 @@ package services
 import (
 	"encoding/json"
 	"errors"
-	"github.com/jfrog/jfrog-client-go/artifactory/auth"
+	rthttpclient "github.com/jfrog/jfrog-client-go/artifactory/httpclient"
 	"github.com/jfrog/jfrog-client-go/artifactory/services/utils"
-	"github.com/jfrog/jfrog-client-go/httpclient"
+	"github.com/jfrog/jfrog-client-go/auth"
 	clientutils "github.com/jfrog/jfrog-client-go/utils"
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 	"github.com/jfrog/jfrog-client-go/utils/log"
@@ -15,16 +15,16 @@ import (
 )
 
 type DistributeService struct {
-	client     *httpclient.HttpClient
-	ArtDetails auth.ArtifactoryDetails
+	client     *rthttpclient.ArtifactoryHttpClient
+	ArtDetails auth.ServiceDetails
 	DryRun     bool
 }
 
-func NewDistributionService(client *httpclient.HttpClient) *DistributeService {
+func NewDistributionService(client *rthttpclient.ArtifactoryHttpClient) *DistributeService {
 	return &DistributeService{client: client}
 }
 
-func (ds *DistributeService) getArtifactoryDetails() auth.ArtifactoryDetails {
+func (ds *DistributeService) getArtifactoryDetails() auth.ServiceDetails {
 	return ds.ArtDetails
 }
 
@@ -68,7 +68,7 @@ func (ds *DistributeService) BuildDistribute(params BuildDistributionParams) err
 	httpClientsDetails := ds.getArtifactoryDetails().CreateHttpClientDetails()
 	utils.SetContentType("application/json", &httpClientsDetails.Headers)
 
-	resp, body, err := ds.client.SendPost(requestFullUrl, requestContent, httpClientsDetails)
+	resp, body, err := ds.client.SendPost(requestFullUrl, requestContent, &httpClientsDetails)
 	if err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ func (ds *DistributeService) BuildDistribute(params BuildDistributionParams) err
 
 	log.Debug("Artifactory response:", resp.Status)
 	if params.IsAsync() && !ds.isDryRun() {
-		log.Info("Asynchronously distributed build", params.GetBuildName()+"/"+params.GetBuildNumber(), "to:", params.GetTargetRepo(), "repository, logs are avalable in Artifactory.")
+		log.Info("Asynchronously distributed build", params.GetBuildName()+"/"+params.GetBuildNumber(), "to:", params.GetTargetRepo(), "repository, logs are available in Artifactory.")
 		return nil
 	}
 

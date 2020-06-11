@@ -3,13 +3,15 @@ package services
 import (
 	"encoding/json"
 	"errors"
-	"github.com/jfrog/jfrog-client-go/artifactory/auth"
+	"net/http"
+	"time"
+
+	rthttpclient "github.com/jfrog/jfrog-client-go/artifactory/httpclient"
 	"github.com/jfrog/jfrog-client-go/artifactory/services/utils"
+	"github.com/jfrog/jfrog-client-go/auth"
 	"github.com/jfrog/jfrog-client-go/httpclient"
 	clientutils "github.com/jfrog/jfrog-client-go/utils"
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
-	"net/http"
-	"time"
 )
 
 const SCAN_BUILD_API_URL = "api/xray/scanBuild"
@@ -20,11 +22,11 @@ const XRAY_SCAN_STABLE_CONNECTION_WINDOW = 100 * time.Second
 const XRAY_FATAL_FAIL_STATUS = -1
 
 type XrayScanService struct {
-	client     *httpclient.HttpClient
-	ArtDetails auth.ArtifactoryDetails
+	client     *rthttpclient.ArtifactoryHttpClient
+	ArtDetails auth.ServiceDetails
 }
 
-func NewXrayScanService(client *httpclient.HttpClient) *XrayScanService {
+func NewXrayScanService(client *rthttpclient.ArtifactoryHttpClient) *XrayScanService {
 	return &XrayScanService{client: client}
 }
 
@@ -99,7 +101,15 @@ func (ps *XrayScanService) execScanRequest(url string, content []byte) (*http.Re
 	httpClientsDetails := ps.ArtDetails.CreateHttpClientDetails()
 	utils.SetContentType("application/json", &httpClientsDetails.Headers)
 
-	resp, _, _, err := ps.client.Send("POST", url, content, true, false, httpClientsDetails)
+	// The scan build operation can take a long time to finish.
+	// To keep the connection open, when Xray starts scanning the build, it starts sending new-lines
+	// on the open channel. This tells the client that the operation is still in progress and the
+	// connection does not get timed out.
+	// We need make sure the new-lines are not buffered on the nginx and are flushed
+	// as soon as Xray sends them.
+	utils.DisableAccelBuffering(&httpClientsDetails.Headers)
+
+	resp, _, _, err := ps.client.Send("POST", url, content, true, false, &httpClientsDetails)
 	if err != nil {
 		return resp, err
 	}

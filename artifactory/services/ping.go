@@ -2,34 +2,34 @@ package services
 
 import (
 	"errors"
-	"github.com/jfrog/jfrog-client-go/artifactory/auth"
+	"net/http"
+
+	rthttpclient "github.com/jfrog/jfrog-client-go/artifactory/httpclient"
 	"github.com/jfrog/jfrog-client-go/artifactory/services/utils"
-	"github.com/jfrog/jfrog-client-go/httpclient"
-	clientutils "github.com/jfrog/jfrog-client-go/utils"
+	"github.com/jfrog/jfrog-client-go/auth"
 	"github.com/jfrog/jfrog-client-go/utils/errorutils"
 	"github.com/jfrog/jfrog-client-go/utils/log"
-	"net/http"
 )
 
 type PingService struct {
-	httpClient *httpclient.HttpClient
-	ArtDetails auth.ArtifactoryDetails
+	client     *rthttpclient.ArtifactoryHttpClient
+	ArtDetails auth.ServiceDetails
 }
 
-func NewPingService(client *httpclient.HttpClient) *PingService {
-	return &PingService{httpClient: client}
+func NewPingService(client *rthttpclient.ArtifactoryHttpClient) *PingService {
+	return &PingService{client: client}
 }
 
-func (ps *PingService) GetArtifactoryDetails() auth.ArtifactoryDetails {
+func (ps *PingService) GetArtifactoryDetails() auth.ServiceDetails {
 	return ps.ArtDetails
 }
 
-func (ps *PingService) SetArtifactoryDetails(rt auth.ArtifactoryDetails) {
+func (ps *PingService) SetArtifactoryDetails(rt auth.ServiceDetails) {
 	ps.ArtDetails = rt
 }
 
-func (ps *PingService) GetJfrogHttpClient() *httpclient.HttpClient {
-	return ps.httpClient
+func (ps *PingService) GetJfrogHttpClient() (*rthttpclient.ArtifactoryHttpClient, error) {
+	return ps.client, nil
 }
 
 func (ps *PingService) IsDryRun() bool {
@@ -41,12 +41,13 @@ func (ps *PingService) Ping() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, respBody, _, err := ps.httpClient.SendGet(url, true, ps.ArtDetails.CreateHttpClientDetails())
+	httpClientDetails := ps.ArtDetails.CreateHttpClientDetails()
+	resp, respBody, _, err := ps.client.SendGet(url, true, &httpClientDetails)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, errorutils.CheckError(errors.New("Artifactory response: " + resp.Status + "\n" + clientutils.IndentJson(respBody)))
+		return respBody, errorutils.CheckError(errors.New("Artifactory response: " + resp.Status))
 	}
 	log.Debug("Artifactory response: ", resp.Status)
 	return respBody, nil

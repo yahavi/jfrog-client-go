@@ -3,15 +3,16 @@ package utils
 import (
 	"encoding/json"
 	"errors"
-	"github.com/jfrog/jfrog-client-go/artifactory/buildinfo"
-	"github.com/jfrog/jfrog-client-go/utils"
-	"github.com/jfrog/jfrog-client-go/utils/errorutils"
-	"github.com/jfrog/jfrog-client-go/utils/log"
 	"net/http"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/jfrog/jfrog-client-go/artifactory/buildinfo"
+	"github.com/jfrog/jfrog-client-go/utils"
+	"github.com/jfrog/jfrog-client-go/utils/errorutils"
+	"github.com/jfrog/jfrog-client-go/utils/log"
 )
 
 type RequiredArtifactProps int
@@ -24,28 +25,71 @@ const (
 	NONE
 )
 
-func AqlSearchDefaultReturnFields(specFile *ArtifactoryCommonParams, flags CommonConf, requiredArtifactProps RequiredArtifactProps) ([]ResultItem, error) {
-	query, err := createAqlBodyForSpec(specFile)
+// Use this function when searching by build without pattern or aql.
+// This will prevent unnecessary search upon all Artifactory.
+func SearchBySpecWithBuild(specFile *ArtifactoryCommonParams, flags CommonConf) ([]ResultItem, error) {
+	buildName, buildNumber, err := getBuildNameAndNumberFromBuildIdentifier(specFile.Build, flags)
 	if err != nil {
 		return nil, err
 	}
-	specFile.Aql = Aql{ItemsFind: query}
-	return AqlSearchBySpec(specFile, flags, requiredArtifactProps)
-}
+	specFile.Aql = Aql{ItemsFind: createAqlBodyForBuild(buildName, buildNumber)}
 
-func AqlSearchBySpec(specFile *ArtifactoryCommonParams, flags CommonConf, requiredArtifactProps RequiredArtifactProps) ([]ResultItem, error) {
-	query := buildQueryFromSpecFile(specFile, requiredArtifactProps)
-	results, err := aqlSearch(query, flags)
+	executionQuery := BuildQueryFromSpecFile(specFile, ALL)
+	results, err := aqlSearch(executionQuery, flags)
 	if err != nil {
 		return nil, err
 	}
-	if specFile.Build != "" && len(results) > 0 {
-		results, err = filterSearchByBuild(specFile, results, flags)
+
+	// If artifacts' properties weren't fetched in previous aql, fetch now and add to results.
+	if !includePropertiesInAqlForSpec(specFile) {
+		err = searchAndAddPropsToAqlResult(results, specFile.Aql.ItemsFind, "build.name", buildName, flags)
 		if err != nil {
 			return nil, err
 		}
 	}
-	if specIncludesSortOrLimit(specFile) {
+
+	// Extract artifacts sha1 for filtering.
+	buildArtifactsSha1, err := extractSha1FromAqlResponse(results)
+	// Filter artifacts by priorities.
+	return filterBuildAqlSearchResults(&results, &buildArtifactsSha1, buildName, buildNumber), err
+}
+
+// Perform search by pattern.
+func SearchBySpecWithPattern(specFile *ArtifactoryCommonParams, flags CommonConf, requiredArtifactProps RequiredArtifactProps) ([]ResultItem, error) {
+	// Create AQL according to spec fields.
+	query, err := CreateAqlBodyForSpecWithPattern(specFile)
+	if err != nil {
+		return nil, err
+	}
+	specFile.Aql = Aql{ItemsFind: query}
+	return SearchBySpecWithAql(specFile, flags, requiredArtifactProps)
+}
+
+// Use this function when running Aql with pattern
+func SearchBySpecWithAql(specFile *ArtifactoryCommonParams, flags CommonConf, requiredArtifactProps RequiredArtifactProps) ([]ResultItem, error) {
+	// Execute the search according to provided aql in specFile.
+	query := BuildQueryFromSpecFile(specFile, requiredArtifactProps)
+	results, err := aqlSearch(query, flags)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter results by build.
+	if specFile.Build != "" && len(results) > 0 {
+		// If requiredArtifactProps is not NONE and 'includePropertiesInAqlForSpec' for specFile returned true, results contains properties for artifacts.
+		resultsArtifactsIncludeProperties := requiredArtifactProps != NONE && includePropertiesInAqlForSpec(specFile)
+		results, err = filterAqlSearchResultsByBuild(specFile, results, flags, resultsArtifactsIncludeProperties)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// If:
+	// 1. Properties weren't included in 'results'.
+	// AND
+	// 2. Properties weren't fetched during 'build' filtering
+	// Then: we should fetch them now.
+	if !includePropertiesInAqlForSpec(specFile) && specFile.Build == "" {
 		switch requiredArtifactProps {
 		case ALL:
 			err = searchAndAddPropsToAqlResult(results, specFile.Aql.ItemsFind, "*", "*", flags)
@@ -72,12 +116,15 @@ func aqlSearch(aqlQuery string, flags CommonConf) ([]ResultItem, error) {
 }
 
 func ExecAql(aqlQuery string, flags CommonConf) ([]byte, error) {
-	client := flags.GetJfrogHttpClient()
+	client, err := flags.GetJfrogHttpClient()
+	if err != nil {
+		return nil, err
+	}
 	aqlUrl := flags.GetArtifactoryDetails().GetUrl() + "api/search/aql"
 	log.Debug("Searching Artifactory using AQL query:\n", aqlQuery)
 
 	httpClientsDetails := flags.GetArtifactoryDetails().CreateHttpClientDetails()
-	resp, body, err := client.SendPost(aqlUrl, []byte(aqlQuery), httpClientsDetails)
+	resp, body, err := client.SendPost(aqlUrl, []byte(aqlQuery), &httpClientsDetails)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +164,8 @@ type ResultItem struct {
 	Actual_Md5  string
 	Actual_Sha1 string
 	Size        int64
+	Created     string
+	Modified    string
 	Properties  []Property
 	Type        string
 }
@@ -147,7 +196,7 @@ func addSeparator(str1, separator, str2 string) string {
 }
 
 func (item *ResultItem) ToArtifact() buildinfo.Artifact {
-	return buildinfo.Artifact{Name: item.Name, Checksum: &buildinfo.Checksum{Sha1: item.Actual_Sha1, Md5: item.Actual_Md5}}
+	return buildinfo.Artifact{Name: item.Name, Checksum: &buildinfo.Checksum{Sha1: item.Actual_Sha1, Md5: item.Actual_Md5}, Path: path.Join(item.Repo, item.Path, item.Name)}
 }
 
 func (item *ResultItem) ToDependency() buildinfo.Dependency {

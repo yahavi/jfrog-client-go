@@ -4,19 +4,27 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/jfrog/jfrog-client-go/utils/errorutils"
-	"github.com/jfrog/jfrog-client-go/utils/log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/jfrog/jfrog-client-go/utils/errorutils"
+	"github.com/jfrog/jfrog-client-go/utils/log"
+)
+
+const (
+	Development = "development"
+	Agent       = "jfrog-client-go"
+	Version     = "0.11.0"
 )
 
 var userAgent = getDefaultUserAgent()
 
 func getVersion() string {
-	return "0.1.0"
+	return Version
 }
 
 func GetUserAgent() string {
@@ -28,19 +36,19 @@ func SetUserAgent(newUserAgent string) {
 }
 
 func getDefaultUserAgent() string {
-	return fmt.Sprintf("jfrog-client-go/%s", getVersion())
+	return fmt.Sprintf("%s/%s", Agent, getVersion())
 }
 
 // Get the local root path, from which to start collecting artifacts to be used for:
 // 1. Uploaded to Artifactory,
 // 2. Adding to the local build-info, to be later published to Artifactory.
-func GetRootPath(path string, useRegExp bool) string {
-	// The first step is to split the local path pattern into sections, by the file seperator.
-	seperator := "/"
-	sections := strings.Split(path, seperator)
+func GetRootPath(path string, useRegExp bool, parentheses ParenthesesSlice) string {
+	// The first step is to split the local path pattern into sections, by the file separator.
+	separator := "/"
+	sections := strings.Split(path, separator)
 	if len(sections) == 1 {
-		seperator = "\\"
-		sections = strings.Split(path, seperator)
+		separator = "\\"
+		sections = strings.Split(path, separator)
 	}
 
 	// Now we start building the root path, making sure to leave out the sub-directory that includes the pattern.
@@ -57,9 +65,15 @@ func GetRootPath(path string, useRegExp bool) string {
 			if strings.Index(section, "*") != -1 {
 				break
 			}
+			if strings.Index(section, "(") != -1 {
+				temp := rootPath + section
+				if isWildcardParentheses(temp, parentheses) {
+					break
+				}
+			}
 		}
 		if rootPath != "" {
-			rootPath += seperator
+			rootPath += separator
 		}
 		if section == "~" {
 			rootPath += GetUserHomeDir()
@@ -68,12 +82,31 @@ func GetRootPath(path string, useRegExp bool) string {
 		}
 	}
 	if len(sections) > 0 && sections[0] == "" {
-		rootPath = seperator + rootPath
+		rootPath = separator + rootPath
 	}
 	if rootPath == "" {
 		return "."
 	}
 	return rootPath
+}
+
+// Return true if the ‘str’ argument contains open parentasis, that is related to a placeholder.
+// The ‘parentheses’ argument contains all the indexes of placeholder parentheses.
+func isWildcardParentheses(str string, parentheses ParenthesesSlice) bool {
+	toFind := "("
+	currStart := 0
+	for {
+		idx := strings.Index(str, toFind)
+		if idx == -1 {
+			break
+		}
+		if parentheses.IsPresent(idx) {
+			return true
+		}
+		currStart += idx + len(toFind)
+		str = str[idx+len(toFind):]
+	}
+	return false
 }
 
 func StringToBool(boolVal string, defaultValue bool) (bool, error) {
@@ -108,9 +141,7 @@ func MergeMaps(src map[string]string, dst map[string]string) {
 }
 
 func CopyMap(src map[string]string) (dst map[string]string) {
-	if dst == nil {
-		dst = make(map[string]string)
-	}
+	dst = make(map[string]string)
 	for k, v := range src {
 		dst[k] = v
 	}
@@ -127,9 +158,21 @@ func PrepareLocalPathForUpload(localPath string, useRegExp bool) string {
 		localPath = localPath[3:]
 	}
 	if !useRegExp {
-		localPath = pathToRegExp(localPath)
+		localPath = pathToRegExp(cleanPath(localPath))
 	}
 	return localPath
+}
+
+// Clean /../ | /./ using filepath.Clean.
+func cleanPath(path string) string {
+	temp := path[len(path)-1:]
+	path = filepath.Clean(path)
+	if temp == `\` || temp == "/" {
+		path += temp
+	}
+	// Since filepath.Clean replaces \\ with \, we revert this action.
+	path = strings.Replace(path, `\`, `\\`, -1)
+	return path
 }
 
 func pathToRegExp(localPath string) string {
@@ -158,6 +201,7 @@ func BuildTargetPath(pattern, path, target string, ignoreRepo bool) (string, err
 		pattern = removeRepoFromPath(pattern)
 		path = removeRepoFromPath(path)
 	}
+	pattern = addEscapingParentheses(pattern, target)
 	pattern = pathToRegExp(pattern)
 	r, err := regexp.Compile(pattern)
 	err = errorutils.CheckError(err)

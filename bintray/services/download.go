@@ -37,8 +37,6 @@ type DownloadService struct {
 	client         *httpclient.HttpClient
 	BintrayDetails auth.BintrayDetails
 	Threads        int
-	MinSplitSize   int64
-	SplitCount     int
 }
 
 type DownloadFileParams struct {
@@ -46,6 +44,8 @@ type DownloadFileParams struct {
 	TargetPath         string
 	IncludeUnpublished bool
 	Flat               bool
+	MinSplitSize       int64
+	SplitCount         int
 }
 
 type DownloadVersionParams struct {
@@ -54,13 +54,7 @@ type DownloadVersionParams struct {
 	IncludeUnpublished bool
 }
 
-func (ds *DownloadService) DownloadFile(downloadParams *DownloadFileParams) (totalDownloded, totalFailed int, err error) {
-	err = fileutils.CreateTempDirPath()
-	if err != nil {
-		return 0, 1, err
-	}
-	defer fileutils.RemoveTempDir()
-
+func (ds *DownloadService) DownloadFile(downloadParams *DownloadFileParams) (totalDownloaded, totalFailed int, err error) {
 	if ds.BintrayDetails.GetUser() == "" {
 		ds.BintrayDetails.SetUser(downloadParams.Subject)
 	}
@@ -73,19 +67,16 @@ func (ds *DownloadService) DownloadFile(downloadParams *DownloadFileParams) (tot
 	return 1, 0, nil
 }
 
-func (ds *DownloadService) DownloadVersion(downloadParams *DownloadVersionParams) (totalDownloded, totalFailed int, err error) {
-	err = fileutils.CreateTempDirPath()
-	if err != nil {
-		return
-	}
-	defer fileutils.RemoveTempDir()
-
+func (ds *DownloadService) DownloadVersion(downloadParams *DownloadVersionParams) (totalDownloaded, totalFailed int, err error) {
 	versionPathUrl := buildDownloadVersionUrl(ds.BintrayDetails.GetApiUrl(), downloadParams)
 	httpClientsDetails := ds.BintrayDetails.CreateHttpClientDetails()
 	if httpClientsDetails.User == "" {
 		httpClientsDetails.User = downloadParams.Subject
 	}
-	client := httpclient.NewDefaultHttpClient()
+	client, err := httpclient.ClientBuilder().Build()
+	if err != nil {
+		return
+	}
 	resp, body, _, _ := client.SendGet(versionPathUrl, true, httpClientsDetails)
 	if resp.StatusCode != http.StatusOK {
 		err = errorutils.CheckError(errors.New(resp.Status + ". " + utils.ReadBintrayMessage(body)))
@@ -97,9 +88,9 @@ func (ds *DownloadService) DownloadVersion(downloadParams *DownloadVersionParams
 		return
 	}
 
-	totalDownloded, err = ds.downloadVersionFiles(files, downloadParams)
-	log.Info("Downloaded", strconv.Itoa(totalDownloded), "artifacts.")
-	totalFailed = len(files) - totalDownloded
+	totalDownloaded, err = ds.downloadVersionFiles(files, downloadParams)
+	log.Info("Downloaded", strconv.Itoa(totalDownloaded), "artifacts.")
+	totalFailed = len(files) - totalDownloaded
 	return
 }
 
@@ -171,12 +162,19 @@ func (ds *DownloadService) downloadBintrayFile(downloadParams *DownloadFileParam
 		url += "?include_unpublished=1"
 	}
 	log.Info(logMsgPrefix+"Downloading", downloadPath)
-	client := httpclient.NewDefaultHttpClient()
+	client, err := httpclient.ClientBuilder().Build()
+	if err != nil {
+		return err
+	}
 
 	httpClientsDetails := ds.BintrayDetails.CreateHttpClientDetails()
-	details, err := client.GetRemoteFileDetails(url, httpClientsDetails)
+	details, resp, err := client.GetRemoteFileDetails(url, httpClientsDetails)
 	if err != nil {
 		return errorutils.CheckError(errors.New("Bintray " + err.Error()))
+	}
+	err = errorutils.CheckResponseStatus(resp, http.StatusOK)
+	if errorutils.CheckError(err) != nil {
+		return err
 	}
 
 	placeHolderTarget, err := clientutils.BuildTargetPath(downloadParams.Path, cleanPath, downloadParams.TargetPath, false)
@@ -197,7 +195,7 @@ func (ds *DownloadService) downloadBintrayFile(downloadParams *DownloadFileParam
 	}
 
 	// Check if the file should be downloaded concurrently.
-	if ds.SplitCount == 0 || ds.MinSplitSize < 0 || ds.MinSplitSize*1000 > details.Size {
+	if downloadParams.SplitCount == 0 || downloadParams.MinSplitSize < 0 || downloadParams.MinSplitSize*1000 > details.Size {
 		// File should not be downloaded concurrently. Download it as one block.
 		downloadDetails := &httpclient.DownloadFileDetails{
 			FileName:      fileName,
@@ -205,11 +203,12 @@ func (ds *DownloadService) downloadBintrayFile(downloadParams *DownloadFileParam
 			LocalPath:     localPath,
 			LocalFileName: localFileName}
 
-		resp, err := client.DownloadFile(downloadDetails, logMsgPrefix, httpClientsDetails, 0, false)
+		resp, err := client.DownloadFile(downloadDetails, logMsgPrefix, httpClientsDetails, utils.BintrayDownloadRetries, false)
 		if err != nil {
 			return err
 		}
 		log.Debug(logMsgPrefix, "Bintray response:", resp.Status)
+		return errorutils.CheckResponseStatus(resp, http.StatusOK)
 	} else {
 		// We should attempt to download the file concurrently, but only if it is provided through the DSN.
 		// To check if the file is provided through the DSN, we first attempt to download the file
@@ -218,7 +217,7 @@ func (ds *DownloadService) downloadBintrayFile(downloadParams *DownloadFileParam
 		var resp *http.Response
 		var redirectUrl string
 		resp, redirectUrl, err =
-			client.DownloadFileNoRedirect(url, localPath, localFileName, httpClientsDetails)
+			client.DownloadFileNoRedirect(url, localPath, localFileName, httpClientsDetails, utils.BintrayDownloadRetries)
 		// There are two options now. Either the file has just been downloaded as one block, or
 		// we got a redirect to DSN download URL. In case of the later, we should download the file
 		// concurrently from the DSN URL.
@@ -231,14 +230,23 @@ func (ds *DownloadService) downloadBintrayFile(downloadParams *DownloadFileParam
 				LocalFileName: localFileName,
 				LocalPath:     localPath,
 				FileSize:      details.Size,
-				SplitCount:    ds.SplitCount}
+				SplitCount:    downloadParams.SplitCount,
+				Retries:       utils.BintrayDownloadRetries}
 
-			err = client.DownloadFileConcurrently(concurrentDownloadFlags, "", httpClientsDetails)
+			resp, err = client.DownloadFileConcurrently(concurrentDownloadFlags, "", httpClientsDetails, nil)
+			if errorutils.CheckError(err) != nil {
+				return err
+			}
+			err = errorutils.CheckResponseStatus(resp, http.StatusPartialContent)
 			if err != nil {
 				return err
 			}
 		} else {
 			if errorutils.CheckError(err) != nil {
+				return err
+			}
+			err = errorutils.CheckResponseStatus(resp, http.StatusOK)
+			if err != nil {
 				return err
 			}
 			log.Debug(logMsgPrefix, "Bintray response:", resp.Status)

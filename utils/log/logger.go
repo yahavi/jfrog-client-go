@@ -17,22 +17,14 @@ const (
 	DEBUG
 )
 
-func init() {
-	if Logger == nil {
-		Logger = NewLogger()
-	}
-}
-
-func NewLogger() Log {
+// Creates a new logger with a given LogLevel.
+// All logs are written to Stderr by default (output to Stdout).
+// If logToWriter != nil, logging is done to the provided writer instead.
+func NewLogger(logLevel LevelType, logToWriter io.Writer) Log {
 	logger := new(jfrogLogger)
-	logLevel := os.Getenv("JFROG_CLI_LOG_LEVEL")
-	if logLevel != "" {
-		logger.SetLogLevel(GetCliLogLevel(logLevel))
-	} else {
-		logger.SetLogLevel(INFO)
-	}
+	logger.SetLogLevel(logLevel)
 	logger.SetOutputWriter(os.Stdout)
-	logger.SetStderrWriter(os.Stderr)
+	logger.SetLogsWriter(logToWriter)
 	return logger
 }
 
@@ -57,7 +49,11 @@ func (logger *jfrogLogger) SetOutputWriter(writer io.Writer) {
 	logger.OutputLog = log.New(writer, "", 0)
 }
 
-func (logger *jfrogLogger) SetStderrWriter(writer io.Writer) {
+// Set the logs writer to Stderr unless an alternative one is provided.
+func (logger *jfrogLogger) SetLogsWriter(writer io.Writer) {
+	if writer == nil {
+		writer = os.Stderr
+	}
 	logger.DebugLog = log.New(writer, "[Debug] ", 0)
 	logger.InfoLog = log.New(writer, "[Info] ", 0)
 	logger.WarnLog = log.New(writer, "[Warn] ", 0)
@@ -68,23 +64,34 @@ func GetLogLevel() LevelType {
 	return Logger.GetLogLevel()
 }
 
+func validateLogInit() {
+	if Logger == nil {
+		panic("Logger not initialized. See API documentation.")
+	}
+}
+
 func Debug(a ...interface{}) {
+	validateLogInit()
 	Logger.Debug(a...)
 }
 
 func Info(a ...interface{}) {
+	validateLogInit()
 	Logger.Info(a...)
 }
 
 func Warn(a ...interface{}) {
+	validateLogInit()
 	Logger.Warn(a...)
 }
 
 func Error(a ...interface{}) {
+	validateLogInit()
 	Logger.Error(a...)
 }
 
 func Output(a ...interface{}) {
+	validateLogInit()
 	Logger.Output(a...)
 }
 
@@ -124,24 +131,11 @@ type Log interface {
 	GetLogLevel() LevelType
 	SetLogLevel(LevelType)
 	SetOutputWriter(writer io.Writer)
-	SetStderrWriter(writer io.Writer)
+	SetLogsWriter(writer io.Writer)
 
 	Debug(a ...interface{})
 	Info(a ...interface{})
 	Warn(a ...interface{})
 	Error(a ...interface{})
 	Output(a ...interface{})
-}
-
-func GetCliLogLevel(logLevel string) LevelType {
-	switch logLevel {
-	case "ERROR":
-		return ERROR
-	case "WARN":
-		return WARN
-	case "DEBUG":
-		return DEBUG
-	default:
-		return INFO
-	}
 }

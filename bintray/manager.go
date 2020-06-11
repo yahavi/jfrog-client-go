@@ -6,13 +6,13 @@ import (
 	"github.com/jfrog/jfrog-client-go/bintray/services/entitlements"
 	"github.com/jfrog/jfrog-client-go/bintray/services/gpg"
 	"github.com/jfrog/jfrog-client-go/bintray/services/logs"
+	"github.com/jfrog/jfrog-client-go/bintray/services/mavensync"
 	"github.com/jfrog/jfrog-client-go/bintray/services/packages"
 	"github.com/jfrog/jfrog-client-go/bintray/services/repositories"
 	"github.com/jfrog/jfrog-client-go/bintray/services/url"
 	"github.com/jfrog/jfrog-client-go/bintray/services/utils"
 	"github.com/jfrog/jfrog-client-go/bintray/services/versions"
 	"github.com/jfrog/jfrog-client-go/httpclient"
-	"github.com/jfrog/jfrog-client-go/utils/log"
 )
 
 type ServicesManager struct {
@@ -23,10 +23,11 @@ type ServicesManager struct {
 func New(config Config) (*ServicesManager, error) {
 	var err error
 	manager := &ServicesManager{config: config}
-	manager.client = httpclient.NewDefaultHttpClient()
-	if config.GetLogger() != nil {
-		log.SetLogger(config.GetLogger())
+	client, err := httpclient.ClientBuilder().Build()
+	if err != nil {
+		return nil, err
 	}
+	manager.client = client
 	return manager, err
 }
 
@@ -34,8 +35,6 @@ func (sm *ServicesManager) newDownloadService() *services.DownloadService {
 	downloadService := services.NewDownloadService(sm.client)
 	downloadService.BintrayDetails = sm.config.GetBintrayDetails()
 	downloadService.Threads = sm.config.GetThreads()
-	downloadService.SplitCount = sm.config.GetSplitCount()
-	downloadService.MinSplitSize = sm.config.GetMinSplitSize()
 	return downloadService
 }
 
@@ -44,17 +43,17 @@ func (sm *ServicesManager) DownloadFile(params *services.DownloadFileParams) (to
 	return downloadService.DownloadFile(params)
 }
 
-func (sm *ServicesManager) DownloadVersion(params *services.DownloadVersionParams) (totalDownloded, totalFailed int, err error) {
+func (sm *ServicesManager) DownloadVersion(params *services.DownloadVersionParams) (totalDownloaded, totalFailed int, err error) {
 	downloadService := sm.newDownloadService()
 	return downloadService.DownloadVersion(params)
 }
 
 func (sm *ServicesManager) UploadFiles(params *services.UploadParams) (totalUploaded, totalFailed int, err error) {
-	downloadService := services.NewUploadService(sm.client)
-	downloadService.BintrayDetails = sm.config.GetBintrayDetails()
-	downloadService.DryRun = sm.config.IsDryRun()
-	downloadService.Threads = sm.config.GetThreads()
-	return downloadService.Upload(params)
+	uploadService := services.NewUploadService(sm.client)
+	uploadService.BintrayDetails = sm.config.GetBintrayDetails()
+	uploadService.DryRun = sm.config.IsDryRun()
+	uploadService.Threads = sm.config.GetThreads()
+	return uploadService.Upload(params)
 }
 
 func (sm *ServicesManager) newVersionService() *versions.VersionService {
@@ -203,4 +202,14 @@ func (sm *ServicesManager) UpdateEntitlement(params *entitlements.Params) error 
 
 func (sm *ServicesManager) DeleteEntitlement(id string, path *versions.Path) error {
 	return sm.newEntitlementService().Delete(id, path)
+}
+
+func (sm *ServicesManager) newMavenCentralSyncService() *mavensync.MavenCentralSyncService {
+	mavenCentralSyncService := mavensync.NewService(sm.client)
+	mavenCentralSyncService.BintrayDetails = sm.config.GetBintrayDetails()
+	return mavenCentralSyncService
+}
+
+func (sm *ServicesManager) MavenCentralContentSync(p *mavensync.Params, path *versions.Path) error {
+	return sm.newMavenCentralSyncService().Sync(p, path)
 }

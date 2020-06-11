@@ -60,6 +60,7 @@ func TestSimpleSuccessful(t *testing.T) {
 }
 
 func TestSimpleExceedConnectionRetries(t *testing.T) {
+	log.SetLogger(log.NewLogger(log.DEBUG, nil))
 	t.Parallel()
 	port := mockServerPort
 	c := &testContext{}
@@ -192,7 +193,10 @@ func TestErrorHandler(t *testing.T) {
 
 // Send post request with context value in the request body.
 func execGet(port int, path string, c *testContext) (*http.Response, error) {
-	client := NewDefaultHttpClient()
+	client, err := ClientBuilder().Build()
+	if err != nil {
+		return nil, err
+	}
 	resp, _, _, err := client.Send("POST", "http://localhost:"+strconv.Itoa(port)+path,
 		[]byte(strconv.Itoa(c.tryNum)), true, false, httputils.HttpClientDetails{})
 	if err != nil {

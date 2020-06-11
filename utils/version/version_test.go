@@ -41,10 +41,41 @@ func TestCompare(t *testing.T) {
 		{"6.5.x-SNAPSHOT", "6.5.2", 1},
 		{"7.x-SNAPSHOT", "6.x-SNAPSHOT", 1},
 		{"6.1.x-SNAPSHOT", "6.2.x-SNAPSHOT", -1},
+		{"go1.13", "go1.13.0", 0},
+		{"go1.13", "go1.14.1", -1},
+		{"go1.13", "go1.12.100", 1},
 	}
 	for _, test := range tests {
 		t.Run(test.ver1+":"+test.ver2, func(t *testing.T) {
-			result := Compare(test.ver1, test.ver2)
+			version := Version{version: test.ver2}
+			result := version.Compare(test.ver1)
+			if result != test.expected {
+				t.Error("ver1:", test.ver1, "ver2:", test.ver2, "Expecting:", test.expected, "got:", result)
+			}
+		})
+	}
+}
+
+func TestAtLeast(t *testing.T) {
+	tests := []struct {
+		ver1     string
+		ver2     string
+		expected bool
+	}{
+		{"1.0.0", "1.0.0", true},
+		{"1.0.1", "1.0.0", true},
+		{"5.10.0", "5.5.2", true},
+		{"1.0.x-SNAPSHOT", "1.0.x-SNAPSHOT", true},
+		{"1.1.x-SNAPSHOT", "1.0.x-SNAPSHOT", true},
+		{"2.0.x-SNAPSHOT", "1.0.x-SNAPSHOT", true},
+		{"development", "5.5", true},
+		{"6.2.0", "6.5.0", false},
+		{"6.6.0", "6.8.0", false},
+	}
+	for _, test := range tests {
+		t.Run(test.ver1+":"+test.ver2, func(t *testing.T) {
+			version := Version{version: test.ver1}
+			result := version.AtLeast(test.ver2)
 			if result != test.expected {
 				t.Error("ver1:", test.ver1, "ver2:", test.ver2, "Expecting:", test.expected, "got:", result)
 			}
