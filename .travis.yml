@@ -10,3 +10,5 @@ install: true
 script:
   - go vet github.com/jfrog/jfrog-client-go/tests
   - go test -v github.com/jfrog/jfrog-client-go/tests -timeout 0 -rt.url="$JFROG_CLI_RT_URL" -rt.user="$JFROG_CLI_RT_USER" -rt.password="$JFROG_CLI_RT_PASSWORD"
+  
+  
