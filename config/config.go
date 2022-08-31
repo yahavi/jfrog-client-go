@@ -2,13 +2,15 @@ package config
 
 import (
 	"context"
-	"github.com/jfrog/jfrog-client-go/auth"
-	"github.com/jfrog/jfrog-client-go/utils/log"
 	"net/http"
 	"time"
+
+	"github.com/jfrog/jfrog-client-go/auth"
+	"github.com/jfrog/jfrog-client-go/utils/log"
 )
 
 type Config interface {
+	RetryConfig
 	GetCertificatesPath() string
 	GetThreads() int
 	IsDryRun() bool
@@ -17,23 +19,20 @@ type Config interface {
 	IsInsecureTls() bool
 	GetContext() context.Context
 	GetHttpTimeout() time.Duration
-	GetHttpRetries() int
-	GetHttpRetryWaitMilliSecs() int
 	GetHttpClient() *http.Client
 }
 
 type servicesConfig struct {
 	auth.ServiceDetails
-	certificatesPath       string
-	dryRun                 bool
-	threads                int
-	logger                 log.Log
-	insecureTls            bool
-	ctx                    context.Context
-	httpTimeout            time.Duration
-	httpRetries            int
-	httpRetryWaitMilliSecs int
-	httpClient             *http.Client
+	serviceRetryConfig
+	certificatesPath string
+	dryRun           bool
+	threads          int
+	logger           log.Log
+	insecureTls      bool
+	ctx              context.Context
+	httpTimeout      time.Duration
+	httpClient       *http.Client
 }
 
 func (config *servicesConfig) IsDryRun() bool {
@@ -66,14 +65,6 @@ func (config *servicesConfig) GetContext() context.Context {
 
 func (config *servicesConfig) GetHttpTimeout() time.Duration {
 	return config.httpTimeout
-}
-
-func (config *servicesConfig) GetHttpRetries() int {
-	return config.httpRetries
-}
-
-func (config *servicesConfig) GetHttpRetryWaitMilliSecs() int {
-	return config.httpRetryWaitMilliSecs
 }
 
 func (config *servicesConfig) GetHttpClient() *http.Client {

@@ -21,6 +21,9 @@ type RetryExecutor struct {
 	// Prefix to print at the beginning of each log.
 	LogMsgPrefix string
 
+	// If true, stop the execution
+	Stop *bool
+
 	// ExecutionHandler is the operation to run with retries.
 	ExecutionHandler ExecutionHandlerFunc
 }
@@ -33,7 +36,7 @@ func (runner *RetryExecutor) Execute() error {
 		shouldRetry, err = runner.ExecutionHandler()
 
 		// If should not retry, return
-		if !shouldRetry {
+		if !shouldRetry || *runner.Stop {
 			return err
 		}
 
