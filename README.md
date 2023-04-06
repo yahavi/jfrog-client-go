@@ -712,20 +712,20 @@ results, err := rtManager.CreateToken(params)
 
 #### Fetching Access Tokens
 
-```go
+```g
 results, err := rtManager.GetTokens()
 ```
 
 #### Fetching Access Tokens of a User
 
-```g
+```go
 results, err := rtManager.GetUserTokens(username)
 ```
 
 #### Refreshing an Access Token
 
 ```go
-params := services.NewRefreshTokenParams()
+params := services.CreateTokenParams{}
 params.AccessToken = "<access token>"
 params.RefreshToken = "<refresh token>"
 params.Token.Scope = "api:*"
