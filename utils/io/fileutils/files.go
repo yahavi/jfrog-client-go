@@ -382,24 +382,28 @@ func calcChecksumDetails(filePath string) (checksum entities.Checksum, err error
 	return calcChecksumDetailsFromReader(file)
 }
 
-func GetFileDetailsFromReader(reader io.Reader, includeChecksums bool) (details *FileDetails, err error) {
+func WriteAndGetFileDetails(reader io.Reader, targetPath string, includeChecksums bool) (details *FileDetails, err error) {
 	details = new(FileDetails)
 
 	pr, pw := io.Pipe()
 	defer func() {
 		err = errors.Join(err, errorutils.CheckError(pr.Close()))
 	}()
-
-	go func() {
-		defer func() {
-			err = errors.Join(err, errorutils.CheckError(pw.Close()))
-		}()
-		details.Size, err = io.Copy(pw, reader)
-	}()
-
 	if includeChecksums {
-		details.Checksum, err = calcChecksumDetailsFromReader(pr)
+		go func() {
+			details.Checksum, err = calcChecksumDetailsFromReader(pr)
+		}()
 	}
+
+	file, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	defer func() {
+		err = errors.Join(err, errorutils.CheckError(file.Close()))
+	}()
+	details.Size, err = io.Copy(io.MultiWriter(pw, file), reader)
+
 	return
 }
 

@@ -644,7 +644,10 @@ func (us *UploadService) doUploadFromReader(fileReader io.Reader, targetUrlWithP
 	if us.Progress != nil {
 		progressReader := us.Progress.NewProgressReader(details.Size, "Uploading", targetUrlWithProps)
 		reader = progressReader.ActionWithProgress(fileReader)
-		defer us.Progress.RemoveProgress(progressReader.GetId())
+		defer func() {
+			us.Progress.RemoveProgress(progressReader.GetId())
+			us.Progress.IncrementGeneralProgress()
+		}()
 	} else {
 		reader = fileReader
 	}
@@ -820,10 +823,6 @@ func (us *UploadService) CreateUploadAsZipFunc(uploadResult *utils.Result, targe
 		uploadResult.TotalCount[threadId]++
 		logMsgPrefix := clientutils.GetLogMsgPrefix(threadId, us.DryRun)
 
-		archiveDataReader := content.NewContentReader(archiveData.writer.GetFilePath(), archiveData.writer.GetArrayKey())
-		defer func() {
-			err = errors.Join(err, errorutils.CheckError(archiveDataReader.Close()))
-		}()
 		targetUrlWithProps, err := buildUploadUrls(us.ArtDetails.GetUrl(), targetPath, archiveData.uploadParams.BuildProps, archiveData.uploadParams.GetDebian(), archiveData.uploadParams.TargetProps)
 		if err != nil {
 			return
@@ -834,21 +833,22 @@ func (us *UploadService) CreateUploadAsZipFunc(uploadResult *utils.Result, targe
 				return us.resultsManager.addNonFinalResult(localPath, targetPath, us.ArtDetails.GetUrl())
 			}
 		}
-		// Make sure all go routines in readFilesAsZip calls were done.
-		var zipReadersWg sync.WaitGroup
-		checksumZipReader := us.readFilesAsZip(archiveDataReader, "Calculating size / checksums",
-			archiveData.uploadParams.Flat, archiveData.uploadParams.Symlink, saveFilesPathsFunc, errorsQueue, &zipReadersWg)
-		details, err := fileutils.GetFileDetailsFromReader(checksumZipReader, archiveData.uploadParams.ChecksumsCalcEnabled)
+
+		tmpDir, err := fileutils.CreateTempDir()
+		if err != nil {
+			return
+		}
+		defer func() {
+			err = errors.Join(err, fileutils.RemoveTempDir(tmpDir))
+		}()
+		details, archivePath, err := us.createArchive(archiveData, tmpDir, saveFilesPathsFunc, errorsQueue)
 		if err != nil {
 			return
 		}
 		log.Info(logMsgPrefix+"Uploading artifact:", targetPath)
 
-		getReaderFunc := func() (io.Reader, error) {
-			archiveDataReader.Reset()
-			return us.readFilesAsZip(archiveDataReader, "Archiving", archiveData.uploadParams.Flat,
-				archiveData.uploadParams.Symlink, nil, errorsQueue, &zipReadersWg), nil
-		}
+		getReaderFunc := func() (io.Reader, error) { return os.Open(archivePath) }
+
 		uploaded, err := us.uploadFileFromReader(getReaderFunc, targetUrlWithProps, archiveData.uploadParams, logMsgPrefix, details)
 
 		if uploaded {
@@ -857,9 +857,25 @@ func (us *UploadService) CreateUploadAsZipFunc(uploadResult *utils.Result, targe
 				err = us.resultsManager.finalizeResult(targetPath, &details.Checksum)
 			}
 		}
-		zipReadersWg.Wait()
 		return
 	}
+}
+
+func (us *UploadService) createArchive(archiveData *ArchiveUploadData, targetDir string, saveFilesPathsFunc func(sourcePath string) error, errorsQueue *clientutils.ErrorsQueue) (details *fileutils.FileDetails, archivePath string, err error) {
+	archiveDataReader := content.NewContentReader(archiveData.writer.GetFilePath(), archiveData.writer.GetArrayKey())
+	defer func() {
+		err = errors.Join(err, errorutils.CheckError(archiveDataReader.Close()))
+	}()
+
+	archivePath = filepath.Join(targetDir, filepath.Base(archiveData.uploadParams.Target))
+	log.Debug("Creating archive:", archivePath)
+	// Make sure all go routines in readFilesAsZip calls were done.
+	var zipReadersWg sync.WaitGroup
+	checksumZipReader := us.readFilesAsZip(archiveDataReader, "Archiving",
+		archiveData.uploadParams.Flat, archiveData.uploadParams.Symlink, saveFilesPathsFunc, errorsQueue, &zipReadersWg)
+	details, err = fileutils.WriteAndGetFileDetails(checksumZipReader, archivePath, archiveData.uploadParams.ChecksumsCalcEnabled)
+	zipReadersWg.Wait()
+	return
 }
 
 // Reads files and streams them as a ZIP to a Reader.
@@ -958,16 +974,16 @@ func (us *UploadService) addFileToZip(artifact *clientutils.Artifact, progressPr
 	if us.Progress != nil {
 		progressReader := us.Progress.NewProgressReader(info.Size(), progressPrefix, localPath)
 		reader = progressReader.ActionWithProgress(file)
-		defer us.Progress.RemoveProgress(progressReader.GetId())
+		defer func() {
+			us.Progress.RemoveProgress(progressReader.GetId())
+			us.Progress.IncrementGeneralProgress()
+		}()
 	} else {
 		reader = file
 	}
 
 	_, err = io.Copy(writer, reader)
-	if errorutils.CheckError(err) != nil {
-		return
-	}
-	return
+	return errorutils.CheckError(err)
 }
 
 func buildUploadUrls(artifactoryUrl, targetPath, buildProps, debianConfig string, targetProps *utils.Properties) (targetUrlWithProps string, err error) {
